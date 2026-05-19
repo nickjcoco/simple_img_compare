@@ -33,4 +33,5 @@ python simple_img_compare.py left.png right.png
 - Mouse wheel to zoom in/out (centered on the cursor).
 - Click and drag to pan.
 - Double-click to reset to fit.
+- Right-click for a menu: Open / Reset view / Clear image.
 

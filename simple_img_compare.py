@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from tkinter import Canvas, Frame, Tk, filedialog
+from tkinter import Canvas, Frame, Menu, Tk, filedialog
 
 from PIL import Image, ImageTk
 
@@ -55,6 +55,17 @@ class ImagePane(Frame):
         self.canvas.bind("<Button-5>", self._on_wheel)
         # Double-click resets the view to fit.
         self.canvas.bind("<Double-Button-1>", lambda e: self.reset_view())
+        # Right-click context menu. macOS sends Button-2 for right-click;
+        # Control-Click is also a common macOS convention.
+        self.canvas.bind("<Button-3>", self._on_right_click)
+        self.canvas.bind("<Button-2>", self._on_right_click)
+        self.canvas.bind("<Control-Button-1>", self._on_right_click)
+
+        self._menu = Menu(self.canvas, tearoff=0)
+        self._menu.add_command(label="Open image...", command=self._open_file_dialog)
+        self._menu.add_command(label="Reset view", command=self.reset_view)
+        self._menu.add_separator()
+        self._menu.add_command(label="Clear image", command=self.clear_image)
 
         if _DND_AVAILABLE:
             self.canvas.drop_target_register(DND_FILES)
@@ -115,6 +126,19 @@ class ImagePane(Frame):
             return
         self.pil_image = img.convert("RGBA") if img.mode not in ("RGB", "RGBA") else img
         self.reset_view()
+
+    def clear_image(self):
+        """Remove the loaded image and restore the placeholder."""
+        self.pil_image = None
+        self.tk_image = None
+        self.zoom = 1.0
+        self.fit_zoom = 1.0
+        self.offset_x = 0.0
+        self.offset_y = 0.0
+        self._pan_anchor = None
+        self._image_id = None
+        self.canvas.configure(cursor="hand2")
+        self._draw_placeholder()
 
     def reset_view(self):
         """Fit the image to the canvas, centered."""
@@ -187,6 +211,16 @@ class ImagePane(Frame):
         self.offset_x = event.x - img_x * self.zoom
         self.offset_y = event.y - img_y * self.zoom
         self._redraw()
+
+    def _on_right_click(self, event):
+        state = "normal" if self.pil_image is not None else "disabled"
+        # Items: 0 Open, 1 Reset, 2 sep, 3 Clear
+        self._menu.entryconfigure(1, state=state)
+        self._menu.entryconfigure(3, state=state)
+        try:
+            self._menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self._menu.grab_release()
 
     def _on_drop(self, event):
         path = _parse_dnd_path(event.data)
