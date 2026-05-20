@@ -106,6 +106,36 @@ class ImagePane(Frame):
             self.offset_x, self.offset_y,
             image=self.tk_image, anchor="nw",
         )
+        self._draw_overlays()
+
+    def _draw_overlays(self):
+        """Bottom-left zoom % and bottom-right resolution badges."""
+        if self.pil_image is None:
+            return
+        cw = self.canvas.winfo_width() or 1
+        ch = self.canvas.winfo_height() or 1
+        pad = 6
+        self._draw_badge(pad, ch - pad, f"{self.zoom * 100:.0f}%", anchor="sw")
+        self._draw_badge(
+            cw - pad, ch - pad,
+            f"{self.pil_image.width} × {self.pil_image.height}",
+            anchor="se",
+        )
+
+    def _draw_badge(self, x, y, text, anchor):
+        font = ("TkDefaultFont", 9)
+        tid = self.canvas.create_text(
+            x, y, text=text, fill="#e6e6e6", font=font, anchor=anchor,
+        )
+        bbox = self.canvas.bbox(tid)
+        if bbox is None:
+            return
+        bx0, by0, bx1, by1 = bbox
+        rid = self.canvas.create_rectangle(
+            bx0 - 4, by0 - 2, bx1 + 4, by1 + 2,
+            fill="#000000", outline="", stipple="gray50",
+        )
+        self.canvas.tag_lower(rid, tid)
 
     # ---------- loading ----------
 
