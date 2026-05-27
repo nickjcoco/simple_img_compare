@@ -1,14 +1,16 @@
 """Side-by-side image comparison app.
 
-Two panels: click to open a file, or drag an image onto a panel. Each panel
-auto-fits the image to its size and supports independent zoom (mouse wheel)
-and pan (click-and-drag).
+Compare 2–4 images side by side. Click a panel to open a file, or drag an
+image onto it. Each panel auto-fits its image and supports independent zoom
+(mouse wheel) and pan (click-and-drag). A View ▸ Lock Views toggle syncs
+zoom/pan/reset across all panels, and panels can be added/removed from the
+File menu.
 """
 from __future__ import annotations
 
 import sys
 from pathlib import Path
-from tkinter import Canvas, Frame, Menu, Tk, filedialog
+from tkinter import BooleanVar, Canvas, Frame, Menu, Tk, filedialog, messagebox
 
 from PIL import Image, ImageTk
 
@@ -27,9 +29,12 @@ ZOOM_STEP = 1.15
 class ImagePane(Frame):
     """A single image panel: load via click or drag-drop, zoom, and pan."""
 
-    def __init__(self, master, title: str):
+    def __init__(self, master, title: str, on_user_transform=None):
         super().__init__(master, bg="#1e1e1e", bd=1, relief="solid")
         self.title = title
+        # Called as on_user_transform(self, kind, **params) after a user-driven
+        # zoom/pan/reset so a controller can mirror it to other panes.
+        self.on_user_transform = on_user_transform
         self.pil_image: Image.Image | None = None
         self.tk_image: ImageTk.PhotoImage | None = None
         self.zoom: float = 1.0
@@ -54,7 +59,7 @@ class ImagePane(Frame):
         self.canvas.bind("<Button-4>", self._on_wheel)
         self.canvas.bind("<Button-5>", self._on_wheel)
         # Double-click resets the view to fit.
-        self.canvas.bind("<Double-Button-1>", lambda e: self.reset_view())
+        self.canvas.bind("<Double-Button-1>", lambda e: self._user_reset())
         # Right-click context menu. macOS sends Button-2 for right-click;
         # Control-Click is also a common macOS convention.
         self.canvas.bind("<Button-3>", self._on_right_click)
@@ -63,7 +68,7 @@ class ImagePane(Frame):
 
         self._menu = Menu(self.canvas, tearoff=0)
         self._menu.add_command(label="Open image...", command=self._open_file_dialog)
-        self._menu.add_command(label="Reset view", command=self.reset_view)
+        self._menu.add_command(label="Reset view", command=self._user_reset)
         self._menu.add_separator()
         self._menu.add_command(label="Clear image", command=self.clear_image)
 
@@ -210,9 +215,18 @@ class ImagePane(Frame):
         if self._pan_anchor is None or self.pil_image is None:
             return
         ax, ay = self._pan_anchor
-        self.offset_x += event.x - ax
-        self.offset_y += event.y - ay
+        dx = event.x - ax
+        dy = event.y - ay
         self._pan_anchor = (event.x, event.y)
+        self.apply_pan(dx, dy)
+        if self.on_user_transform:
+            self.on_user_transform(self, "pan", dx=dx, dy=dy)
+
+    def apply_pan(self, dx, dy):
+        if self.pil_image is None:
+            return
+        self.offset_x += dx
+        self.offset_y += dy
         if self._image_id is not None:
             self.canvas.coords(self._image_id, self.offset_x, self.offset_y)
 
@@ -231,16 +245,32 @@ class ImagePane(Frame):
         else:
             direction = 1 if event.delta > 0 else -1
         factor = ZOOM_STEP if direction > 0 else 1 / ZOOM_STEP
+        before = self.zoom
+        self.apply_zoom(factor, event.x, event.y)
+        if self.zoom != before and self.on_user_transform:
+            self.on_user_transform(self, "zoom", factor=factor, ex=event.x, ey=event.y)
+
+    def apply_zoom(self, factor, ex, ey):
+        if self.pil_image is None:
+            return
         new_zoom = max(MIN_ZOOM, min(MAX_ZOOM, self.zoom * factor))
         if new_zoom == self.zoom:
             return
-        # Zoom centered on the cursor position.
-        img_x = (event.x - self.offset_x) / self.zoom
-        img_y = (event.y - self.offset_y) / self.zoom
+        # Zoom centered on the (ex, ey) canvas point.
+        img_x = (ex - self.offset_x) / self.zoom
+        img_y = (ey - self.offset_y) / self.zoom
         self.zoom = new_zoom
-        self.offset_x = event.x - img_x * self.zoom
-        self.offset_y = event.y - img_y * self.zoom
+        self.offset_x = ex - img_x * self.zoom
+        self.offset_y = ey - img_y * self.zoom
         self._redraw()
+
+    def _user_reset(self):
+        """Reset this pane to fit and notify the controller (for view-lock)."""
+        if self.pil_image is None:
+            return
+        self.reset_view()
+        if self.on_user_transform:
+            self.on_user_transform(self, "reset")
 
     def _on_right_click(self, event):
         state = "normal" if self.pil_image is not None else "disabled"
@@ -281,28 +311,152 @@ def _parse_dnd_path(data: str) -> str | None:
     return data.split()[0]
 
 
+MIN_PANES = 2
+MAX_PANES = 4
+
+
+class App:
+    """Owns the window, menu bar, and the set of image panes."""
+
+    def __init__(self, root):
+        self.root = root
+        self.panes: list[ImagePane] = []
+        self.lock_var = BooleanVar(value=False)
+
+        self.container = Frame(root, bg="#111111")
+        self.container.pack(fill="both", expand=True, padx=4, pady=4)
+        self.container.rowconfigure(0, weight=1)
+
+        self._build_menu()
+        for _ in range(MIN_PANES):
+            self.add_pane()
+
+    # ---------- menu ----------
+
+    def _build_menu(self):
+        menubar = Menu(self.root)
+
+        self.file_menu = Menu(menubar, tearoff=0)
+        self.file_menu.add_command(
+            label="Add Image", command=self.add_pane, accelerator="Ctrl++"
+        )
+        self.file_menu.add_command(
+            label="Remove Image", command=self.remove_pane, accelerator="Ctrl+-"
+        )
+        self.file_menu.add_separator()
+        self.file_menu.add_command(label="Exit", command=self.root.destroy)
+        menubar.add_cascade(label="File", menu=self.file_menu)
+
+        edit_menu = Menu(menubar, tearoff=0)
+        edit_menu.add_command(label="Clear All Images", command=self.clear_all)
+        menubar.add_cascade(label="Edit", menu=edit_menu)
+
+        view_menu = Menu(menubar, tearoff=0)
+        view_menu.add_checkbutton(
+            label="Lock Views (sync zoom/pan)",
+            variable=self.lock_var,
+            accelerator="Ctrl+L",
+        )
+        view_menu.add_command(label="Reset All Views", command=self.reset_all)
+        menubar.add_cascade(label="View", menu=view_menu)
+
+        help_menu = Menu(menubar, tearoff=0)
+        help_menu.add_command(label="About", command=self._show_about)
+        menubar.add_cascade(label="Help", menu=help_menu)
+
+        self.root.config(menu=menubar)
+        self.root.bind("<Control-plus>", lambda e: self.add_pane())
+        self.root.bind("<Control-equal>", lambda e: self.add_pane())
+        self.root.bind("<Control-minus>", lambda e: self.remove_pane())
+        self.root.bind("<Control-l>", lambda e: self.lock_var.set(not self.lock_var.get()))
+
+    def _update_menu_state(self):
+        self.file_menu.entryconfigure(
+            "Add Image", state="normal" if len(self.panes) < MAX_PANES else "disabled"
+        )
+        self.file_menu.entryconfigure(
+            "Remove Image",
+            state="normal" if len(self.panes) > MIN_PANES else "disabled",
+        )
+
+    # ---------- panes ----------
+
+    def add_pane(self):
+        if len(self.panes) >= MAX_PANES:
+            return
+        title = f"Image {chr(ord('A') + len(self.panes))}"
+        pane = ImagePane(self.container, title, on_user_transform=self._broadcast)
+        self.panes.append(pane)
+        self._relayout()
+        self._update_menu_state()
+
+    def remove_pane(self):
+        if len(self.panes) <= MIN_PANES:
+            return
+        self.panes.pop().destroy()
+        self._relayout()
+        self._update_menu_state()
+
+    def _relayout(self):
+        for i in range(MAX_PANES):
+            self.container.columnconfigure(i, weight=0, uniform="")
+        last = len(self.panes) - 1
+        for i, pane in enumerate(self.panes):
+            padx = (0 if i == 0 else 1, 0 if i == last else 1)
+            pane.grid(row=0, column=i, sticky="nsew", padx=padx)
+            self.container.columnconfigure(i, weight=1, uniform="pane")
+
+    # ---------- view-lock broadcast ----------
+
+    def _broadcast(self, source, kind, **kw):
+        if not self.lock_var.get():
+            return
+        for pane in self.panes:
+            if pane is source:
+                continue
+            if kind == "zoom":
+                pane.apply_zoom(kw["factor"], kw["ex"], kw["ey"])
+            elif kind == "pan":
+                pane.apply_pan(kw["dx"], kw["dy"])
+            elif kind == "reset":
+                pane.reset_view()
+
+    # ---------- menu actions ----------
+
+    def clear_all(self):
+        for pane in self.panes:
+            pane.clear_image()
+
+    def reset_all(self):
+        for pane in self.panes:
+            pane.reset_view()
+
+    def _show_about(self):
+        messagebox.showinfo(
+            "About Simple Image Compare",
+            "Simple Image Compare\n\n"
+            "Compare 2–4 images side by side.\n\n"
+            "• Click a pane or drag an image onto it to load.\n"
+            "• Mouse wheel to zoom, click-drag to pan, double-click to fit.\n"
+            "• Right-click a pane for its menu.\n"
+            "• View ▸ Lock Views syncs zoom/pan/reset across all panes.",
+        )
+
+
 def main():
     root = TkinterDnD.Tk() if _DND_AVAILABLE else Tk()
     root.title("Simple Image Compare")
     root.geometry("1200x700")
     root.minsize(400, 300)
 
-    container = Frame(root, bg="#111111")
-    container.pack(fill="both", expand=True, padx=4, pady=4)
-    container.columnconfigure(0, weight=1, uniform="pane")
-    container.columnconfigure(1, weight=1, uniform="pane")
-    container.rowconfigure(0, weight=1)
+    app = App(root)
 
-    left = ImagePane(container, "Image A")
-    right = ImagePane(container, "Image B")
-    left.grid(row=0, column=0, sticky="nsew", padx=(0, 2))
-    right.grid(row=0, column=1, sticky="nsew", padx=(2, 0))
-
-    # Allow passing initial images on the command line.
-    if len(sys.argv) > 1:
-        left.after(50, lambda: left.load_image(sys.argv[1]))
-    if len(sys.argv) > 2:
-        right.after(50, lambda: right.load_image(sys.argv[2]))
+    # Allow passing up to MAX_PANES initial images on the command line.
+    for i, path in enumerate(sys.argv[1 : 1 + MAX_PANES]):
+        while len(app.panes) <= i:
+            app.add_pane()
+        pane = app.panes[i]
+        pane.after(50, lambda p=pane, src=path: p.load_image(src))
 
     root.mainloop()
 
