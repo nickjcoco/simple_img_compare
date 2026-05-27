@@ -20,10 +20,10 @@ Python installers on Windows and macOS; on Linux install your distro's
 python simple_img_compare.py
 ```
 
-Optionally pass one or two image paths to preload them:
+Optionally pass up to four image paths to preload them:
 
 ```
-python simple_img_compare.py left.png right.png
+python simple_img_compare.py a.png b.png
 ```
 
 ## Controls (per panel)
@@ -34,4 +34,18 @@ python simple_img_compare.py left.png right.png
 - Click and drag to pan.
 - Double-click to reset to fit.
 - Right-click for a menu: Open / Reset view / Clear image.
+
+## Menu bar
+
+- **File** — Add Image / Remove Image (compare between 2 and 4 panels at once),
+  Exit.
+- **Edit** — Clear All Images.
+- **View** — Lock Views (sync zoom/pan), Reset All Views.
+- **Help** — About.
+
+### Lock Views
+
+With **View ▸ Lock Views** enabled (or `Ctrl+L`), zooming, panning, or resetting
+one panel applies the same operation to every other panel, so the images move
+in unison. Disable it to manipulate each panel independently again.
 
