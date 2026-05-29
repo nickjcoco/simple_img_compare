@@ -49,3 +49,32 @@ With **View ▸ Lock Views** enabled (or `Ctrl+L`), zooming, panning, or resetti
 one panel applies the same operation to every other panel, so the images move
 in unison. Disable it to manipulate each panel independently again.
 
+## Standalone executables
+
+Prebuilt binaries that do **not** require Python are produced by CI:
+
+- `SimpleImageCompare.exe` — Windows (x64)
+- `SimpleImageCompare` — Linux (x64, built on Ubuntu 22.04)
+- `SimpleImageCompare.app` — macOS (Apple Silicon, zipped)
+
+Download them from the latest run of the **Build executables** workflow on the
+[Actions tab](https://github.com/nickjcoco/simple_img_compare/actions), or from
+the [Releases](https://github.com/nickjcoco/simple_img_compare/releases) page
+once a `v*` tag has been pushed.
+
+### Build a binary yourself
+
+PyInstaller can only target the OS it runs on, so build on each platform you
+want a binary for. From a clone of this repo:
+
+```
+pip install -r requirements-build.txt
+pyinstaller --clean --noconfirm SimpleImageCompare.spec
+```
+
+The output appears in `dist/`:
+
+- Windows: `dist\SimpleImageCompare.exe` (single file, double-click to run)
+- Linux: `dist/SimpleImageCompare` (single file; `chmod +x` then run)
+- macOS: `dist/SimpleImageCompare.app` (open or `open dist/SimpleImageCompare.app`)
+
